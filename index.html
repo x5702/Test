@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+        <meta name="viewport" content="user-scalable=no">
+		<link rel="stylesheet" type="text/css" href="fonts/gamefont.css">
+		<title>WebGL</title>
+    </head>
+    <body>
+        <script src="lightgl.js"></script>
+
+		<script id="basic-vert" type="vertex-shader">
+      varying vec2 coord;
+			void main() {
+        coord = gl_TexCoord.xy;
+				gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
+			}
+		</script>
+
+    <script id="basic-frag" type="fragment-shader">
+      uniform sampler2D texture;
+      varying vec2 coord;
+      uniform vec4 daytimeColor;
+      void main() {
+        gl_FragColor = texture2D(texture, coord)*daytimeColor;
+      }
+    </script>
+
+		<script id="map-frag" type="fragment-shader">
+      uniform sampler2D texture;
+      uniform sampler2D depthmap;
+      uniform sampler2D perlinmap;
+      uniform sampler2D reflectionmap;
+      uniform float time;
+      uniform vec4 daytimeColor;
+      varying vec2 coord;
+      void main() {
+        vec4 depth = texture2D(depthmap, coord);
+
+        float alpha = 0.25;
+        float speed = 30.0;
+        float frequency=50.0;
+        float amplitude=0.015;
+
+        float a = texture2D(perlinmap, vec2(fract((time*speed)/1024.0), coord.y)).x-0.5;
+        float b = texture2D(perlinmap, vec2(coord.x, fract((time*speed)/1024.0))).x-0.5;
+        vec2 uv = vec2(coord.x+a*amplitude * depth.x, coord.y+b*amplitude * depth.x);
+
+        float reflectAlpha = 0.4;
+        vec4 baseColor = texture2D(texture, coord);
+        vec4 reflectColor = texture2D(reflectionmap, coord);
+        reflectAlpha = reflectAlpha*depth.y;
+        baseColor = baseColor*(1.0-reflectAlpha) + reflectColor*reflectAlpha;
+
+        vec4 dreflectColor = texture2D(reflectionmap, uv);
+        vec4 distortColor = texture2D(texture, uv);
+        distortColor = distortColor*(1.0-reflectAlpha) + dreflectColor*reflectAlpha;
+
+        gl_FragColor = (baseColor*(1.0-alpha) + distortColor*alpha)*daytimeColor;
+			}
+		</script>
+
+    <script id="light-frag" type="fragment-shader">
+      uniform sampler2D texture;
+      uniform float strength;
+      varying vec2 coord;
+      void main() {
+        vec4 lightColor = vec4(0.82, 0.82, 0.32, 1.0);
+        float light = texture2D(texture, coord).z;
+
+        gl_FragColor = lightColor*light*strength;
+      }
+    </script>
+
+    <scrip id="perlin-frag" type="fragment-shader">
+
+    </script>
+
+		<script>
+			var globalTimeMs = 0.0;
+      var gWidth = 832;
+      var gHeight = 662;
+			var gl = GL.create();
+
+      var time = 0;
+      var noon = [0.99, 0.99, 0.82, 1.0];
+      var night = [0.28, 0.28, 0.32, 1.0];
+      var daytime = [0.28, 0.28, 0.32, 1.0];
+
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+      var reflection = new GL.Texture(gWidth, gHeight);
+      var lightmap = new GL.Texture(gWidth, gHeight);
+
+		  var meshMap = GL.Mesh.plane({ coords: true });
+      var texture = GL.Texture.fromURL('img/testimg.png');
+      var depth = GL.Texture.fromURL('img/depth.png');
+      var perlin = GL.Texture.fromURL('img/perlin.png');
+
+      var meshTree = GL.Mesh.plane({ coords: true });
+      var textureTree = GL.Texture.fromURL('img/Tree.png');
+
+			var mapshader = new GL.Shader('basic-vert', 'map-frag');
+      var basicshader = new GL.Shader('basic-vert', 'basic-frag');
+      var lightshader = new GL.Shader('basic-vert', 'light-frag');
+
+			gl.onupdate = function(seconds) {
+        globalTimeMs += seconds;
+        time = Math.sin(globalTimeMs*0.2)/2+0.5;
+
+        function lerp(a, b, l){
+          return b*l + a*(1.0-l);
+        }
+
+        daytime[0] = lerp(noon[0], night[0], time);
+        daytime[1] = lerp(noon[1], night[1], time);
+        daytime[2] = lerp(noon[2], night[2], time);
+        daytime[3] = lerp(noon[3], night[3], time);
+			};
+
+			gl.ondraw = function() {
+        reflection.drawTo(function() {
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+          gl.loadIdentity();
+          gl.translate(0, 0, -100);
+          gl.scale(gWidth, gHeight, 1);
+          texture.bind(0);
+          basicshader.uniforms({
+            texture: 0,
+            daytimeColor: daytime,
+          }).draw(meshMap);
+
+          gl.loadIdentity();
+  			  gl.translate(340, -360-198, -90);
+          gl.scale(96, -96, 1);
+          textureTree.bind(0);
+          basicshader.uniforms({
+            texture: 0,
+            daytimeColor: daytime,
+          }).draw(meshTree);
+        });
+
+        gl.loadIdentity();
+        gl.translate(0, 0, -100);
+        gl.scale(gWidth, gHeight, 1);
+        texture.bind(0);
+        depth.bind(1);
+        perlin.bind(2);
+        reflection.bind(3);
+        mapshader.uniforms({
+          texture: 0,
+          depthmap: 1,
+          perlinmap: 2,
+          reflectionmap: 3,
+          time: globalTimeMs,
+          daytimeColor: daytime,
+        }).draw(meshMap);
+
+        gl.loadIdentity();
+        gl.translate(340, -360, -90);
+        gl.scale(96, 96, 1);
+        textureTree.bind(0);
+        basicshader.uniforms({
+          texture: 0,
+          daytimeColor: daytime,
+        }).draw(meshTree);
+
+        var str = Math.min(Math.max(time*time-0.5, 0.0)/0.2, 1.0)
+        lightmap.drawTo(function() {
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+          gl.loadIdentity();
+          gl.translate(0, 0, -100);
+          gl.scale(gWidth, gHeight, 1);
+          depth.bind(0);
+          lightshader.uniforms({
+            texture: 0,
+            strength: str,
+          }).draw(meshMap);
+        });
+
+        gl.loadIdentity();
+        gl.translate(0, 0, -20);
+        gl.scale(gWidth, gHeight, 1);
+        lightmap.bind(0);
+        basicshader.uniforms({
+          texture: 0,
+          daytimeColor: [1.0, 1.0, 1.0, 1.0],
+        }).draw(meshMap);
+			};
+
+      document.body.appendChild(gl.canvas);
+      document.body.style.overflow = 'hidden';
+      gl.canvas.style.position = 'absolute';
+      gl.canvas.style.left = '0px';
+      gl.canvas.style.top = '0px';
+      function resize2() {
+        gl.canvas.width = gWidth;
+        gl.canvas.height = gHeight;
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+        gl.matrixMode(gl.PROJECTION);
+        gl.loadIdentity();
+        gl.ortho(-gl.canvas.width, gl.canvas.width, -gl.canvas.height, gl.canvas.height, 0.1, 500);
+        gl.matrixMode(gl.MODELVIEW);
+        if (gl.ondraw) gl.ondraw();
+      }
+      window.addEventListener('resize', resize2);
+      resize2();
+
+			gl.animate();
+
+		</script>
+    </body>
+</html>
